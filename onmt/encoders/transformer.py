@@ -52,6 +52,48 @@ class TransformerEncoderLayer(nn.Module):
         return self.feed_forward(out)
 
 
+class TransformerEncoderCapsuleLayer(nn.Module):
+    """
+    A single layer of the transformer encoder.
+
+    Args:
+        d_model (int): the dimension of keys/values/queries in
+                   MultiHeadedAttention, also the input size of
+                   the first-layer of the PositionwiseFeedForward.
+        heads (int): the number of head for MultiHeadedAttention.
+        d_ff (int): the second-layer of the PositionwiseFeedForward.
+        dropout (float): dropout probability(0-1.0).
+    """
+
+    def __init__(self, d_model, heads, d_ff, dropout):
+        super(TransformerEncoderCapsuleLayer, self).__init__()
+
+        self.self_attn = onmt.modules.MultiHeadedAttentionCapsule(
+            heads, d_model, dropout=dropout)
+        self.feed_forward = PositionwiseFeedForward(d_model, d_ff, dropout)
+        self.layer_norm = nn.LayerNorm(d_model, eps=1e-6)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, inputs, mask):
+        """
+        Transformer Encoder Layer definition.
+
+        Args:
+            inputs (`FloatTensor`): `[batch_size x src_len x model_dim]`
+            mask (`LongTensor`): `[batch_size x src_len x src_len]`
+
+        Returns:
+            (`FloatTensor`):
+
+            * outputs `[batch_size x src_len x model_dim]`
+        """
+        input_norm = self.layer_norm(inputs)
+        context, _ = self.self_attn(input_norm, input_norm, input_norm,
+                                    mask=mask)
+        out = self.dropout(context) + inputs
+        return self.feed_forward(out)
+
+
 class TransformerEncoder(EncoderBase):
     """
     The Transformer encoder from "Attention is All You Need".
@@ -90,9 +132,27 @@ class TransformerEncoder(EncoderBase):
 
         self.num_layers = num_layers
         self.embeddings = embeddings
-        self.transformer = nn.ModuleList(
-            [TransformerEncoderLayer(d_model, heads, d_ff, dropout)
-             for _ in range(num_layers)])
+        self.cover = 'full'  # full, low, high, zero
+        if self.cover == 'full':
+            self.transformer = nn.ModuleList(
+                [TransformerEncoderCapsuleLayer(d_model, heads, d_ff, dropout)
+                 for _ in range(num_layers)])
+        elif self.cover == 'low':
+            self.transformer = nn.ModuleList(
+                [TransformerEncoderCapsuleLayer(d_model, heads, d_ff, dropout)
+                 for _ in range(num_layers // 2)] +
+                [TransformerEncoderLayer(d_model, heads, d_ff, dropout)
+                 for _ in range(num_layers // 2)])
+        elif self.cover == 'high':
+            self.transformer = nn.ModuleList(
+                [TransformerEncoderLayer(d_model, heads, d_ff, dropout)
+                 for _ in range(num_layers // 2)] +
+                [TransformerEncoderCapsuleLayer(d_model, heads, d_ff, dropout)
+                 for _ in range(num_layers // 2)])
+        else:
+            self.transformer = nn.ModuleList(
+                [TransformerEncoderLayer(d_model, heads, d_ff, dropout)
+                 for _ in range(num_layers)])
         self.layer_norm = nn.LayerNorm(d_model, eps=1e-6)
 
     def forward(self, src, lengths=None):
